@@ -31,26 +31,32 @@ from PIL import Image
 from PIL.ExifTags import TAGS
 import datetime
 import re
-from PyQt5.QtWidgets import QProgressBar, QProgressDialog
+from hachoir.parser import createParser
+from hachoir.metadata import extractMetadata
+
+from pymediainfo import MediaInfo
+# TODO try mutagen as well for video metadata
+
+# TODO - standalone qt progress bar
+#from PyQt5.QtWidgets import QProgressBar, QProgressDialog
 
 class NamedMedia():
 
     def __init__(self, source_path, progress=None, parent=None):
-        # dest_path = os.path.join(source_path, 'renamed34')
+
         # TODO - handle dialog to remove existing renamed34 directory
         self.unique_file_names = {}
 
-        # if not os.path.exists(dest_path):
-            # create directory
-            # os.makedirs(dest_path)
-
         # video containers to search for
-        mediaExtensions = "jpg", "JPG", "mts"
+        image_extensions = "jpg"
+        video_extensions = "mts"
+        # require mediainfo native package
+        video_extensions_mp4 = "mp4", "avi"
 
-        numFilesFound = 0
-        numFilesParsed = 0
+        num_files_found = 0
+        num_files_parsed = 0
 
-        # all files in specified directoryNamedMedia
+        # all files in specified source directory
         fnames = listdir(source_path)
 
         if (progress != None):
@@ -62,82 +68,172 @@ class NamedMedia():
                 # create directory
                 os.makedirs(dest_path)
 
+        # verify file is of supported type
         for index, fname in enumerate(fnames):
 
             if (progress):
                 progress.setValue(index)
 
-            fnameModified = 'MISSED IT'
+            fname_modified = 'MISSED IT'
             fileSuffix = fname.split(".")
 
             # list of files with specified extensions
-            if fileSuffix[-1] in mediaExtensions:
+            lower_extension = fileSuffix[-1].lower()
 
-                if fileSuffix[-1] == "mts":
+            if lower_extension in video_extensions:
 
-                    numFilesFound += 1
-                    fnameModified = '{0}_{1}_{2}_{3}_{4}_{5}.{6}'.format(fname[0:4], fname[4:6], fname[6:8], fname[8:10], fname[10:12], fname[12:14], fileSuffix[-1])
-                    # shutil.copyfile('{0}\{1}'.format(source_path, fname), '{0}\{1}'.format(dest_path, fnameModified))
-                    numFilesParsed += 1
+                num_files_found += 1
+
+                fullFileName = os.path.join(source_path, fname)
+
+                parser = createParser(fullFileName)
+                if not parser:
+                    print("Unable to parse file", file=sys.stderr)
+                    continue
+                with parser:
+                    try:
+                        metadata = extractMetadata(parser)
+                    except Exception as err:
+                        print("Metadata extraction error: %s" % err)
+                        metadata = None
+                if not metadata:
+                    print("Unable to extract metadata")
+                    continue
+
+                creationDateTime = metadata._Metadata__data['creation_date'].values[0].value;
+                creationDateText = metadata.exportPlaintext()
+                if not creationDateText:
+                    print("exportPlaintext() error")
+                    continue
+
+                year = creationDateTime.year
+                date = '{0:02d}_{1:02d}'.format(creationDateTime.month, creationDateTime.day)
+                time_hour = "{:02}".format(creationDateTime.hour)
+                time_min = "{:02}".format(creationDateTime.minute)
+                time_sec = "{:02}".format(creationDateTime.second)
+
+                fname_modified = '{0}_{1}_{2}_{3}_{4}_{5}.{6}'.format(year, date, time_hour, time_min, time_sec,
+                                                                      time_msec, fileSuffix[-1])
+                # create unique filename for those with the same timestamp
+                while fname_modified in self.unique_file_names:
+
+                    bump_mec_for_dups = int(time_msec) + 1
+                    time_msec = bump_mec_for_dups
+                    fname_modified = '{0}_{1}_{2}_{3}_{4}_{5}.{6}'.format(year, date, time_hour,
+                                                                         time_min, time_sec,
+                                                                         time_msec, fileSuffix[-1])
+
+                self.unique_file_names[fname_modified] = [fname, [int(year), int(date_month), int(date_day), int(time_hour), int(time_min), int(time_sec), int(time_msec)]]
+
+                # copy file with unique name
+                if (progress == None):
+                    shutil.copyfile(os.path.join(source_path, fname), os.path.join(dest_path, fname_modified))
+
+                num_files_parsed += 1
+
+            elif lower_extension in video_extensions_mp4:
+
+                num_files_found += 1
+
+                fullFileName = os.path.join(source_path, fname)
+
+                parsed_media = MediaInfo.parse(fullFileName)
+
+                for track in parsed_media.tracks:
+                    if track.track_type == 'General':
+                        value_ = track.file_last_modification_date__local
+                        [date, time] = value_.split(" ")
+                        date = date.split("-")
+                        date_year = int(date[0])
+                        date_month = int(date[1])
+                        date_day = int(date[2])
+                        date = '{0:02d}_{1:02d}'.format(date_month, date_day)
+
+                        time = time.split(":")
+                        time_hour = time[0]
+                        time_min = time[1]
+                        time_sec = time[2]
+                        time_msec = '00'
+
+                        fname_modified = '{0}_{1}_{2}_{3}_{4}_{5}.{6}'.format(date_year, date, time_hour, time_min, time_sec,
+                                                                              time_msec, fileSuffix[-1])
+
+                        # create unique filename for those with the same timestamp
+                        while fname_modified in self.unique_file_names:
+                            bump_mec_for_dups = int(time_msec) + 1
+                            time_msec = bump_mec_for_dups
+                            fname_modified = '{0}_{1}_{2}_{3}_{4}_{5}.{6}'.format(date_year, date, time_hour,
+                                                                                  time_min, time_sec,
+                                                                                  time_msec, fileSuffix[-1])
+
+                        # todo collections.OrderedDict
+                        self.unique_file_names[fname_modified] = [fname, [int(date_year), int(date_month), int(date_day), int(time_hour), int(time_min), int(time_sec), int(time_msec)]]
+
+                        # copy file with unique name
+                        if (progress == None):
+                            shutil.copyfile(os.path.join(source_path, fname), os.path.join(dest_path, fname_modified))
+
+                        num_files_parsed += 1
+
+                        break
+
+            elif lower_extension in image_extensions:
+
+                num_files_found += 1
+
+                img = Image.open(os.path.join(source_path, fname))
+
+                exif_data = img._getexif()
+                if (exif_data != None):
+
+                    for tag, value in exif_data.items():
+
+                        tagString = TAGS.get(tag, tag)
+                        if tagString == 'DateTimeOriginal':
+
+                            value_ = re.sub('[:]', '_', value)
+                            year = value_[0:4]
+                            date = value_[5:10]
+                            date_month = value_[5:7]
+                            date_day = value_[8:10]
+                            # time = value_[11:19]
+                            time_hour = value_[11:13]
+                            time_min = value_[14:16]
+                            time_sec = value_[17:19]
+                            time_msec = '00'
+
+                            fname_modified = '{0}_{1}_{2}_{3}_{4}_{5}.{6}'.format(year, date, time_hour, time_min, time_sec, time_msec, fileSuffix[-1])
+
+                            # create unique filename for those with the same timestamp
+                            while fname_modified in self.unique_file_names:
+                                bump_mec_for_dups = int(time_msec) + 1
+                                time_msec = bump_mec_for_dups
+                                fname_modified = '{0}_{1}_{2}_{3}_{4}_{5}.{6}'.format(year, date, time_hour,
+                                                                                      time_min, time_sec,
+                                                                                      time_msec, fileSuffix[-1])
+
+                            # todo collections.OrderedDict
+                            self.unique_file_names[fname_modified] = [fname, [int(year), int(date_month), int(date_day), int(time_hour), int(time_min), int(time_sec), int(time_msec)]]
+
+                            # copy file with unique name
+                            if (progress == None):
+                                shutil.copyfile(os.path.join(source_path, fname), os.path.join(dest_path, fname_modified))
+
+                            num_files_parsed += 1
+
+                            break
 
                 else:
-
-                    numFilesFound += 1
-
-                    img = Image.open(os.path.join(source_path, fname));
-                    exif_data = img._getexif()
-                    if (exif_data != None):
-                        for tag, value in exif_data.items():
-                            tagString = TAGS.get(tag, tag)
-                            if tagString == 'DateTimeOriginal':
-                                value_ = re.sub('[:]', '_', value)
-                                year = value_[0:4]
-                                date = value_[5:10]
-                                date_month = value_[5:7]
-                                date_day = value_[8:10]
-                                # time = value_[11:19]
-                                time_hour = value_[11:13]
-                                time_min = value_[14:16]
-                                time_sec = value_[17:19]
-                                time_msec = '00'
-                                fnameModified = '{0}_{1}_{2}_{3}_{4}_{5}.{6}'.format(year, date, time_hour, time_min, time_sec, time_msec, fileSuffix[-1])
-
-                                # create unique filename for those with the same timestamp
-                                # dummy_msec = 1
-                                while fnameModified in self.unique_file_names:
-                                    time_msec += 1
-                                    fnameModified = '{0}_{1}_{2}_{3}_{4}_{5}.{6}'.format(year, date, time_hour,
-                                                                                         time_min, time_sec,
-                                                                                         time_msec, fileSuffix[-1])
-
-                                # todo collections.OrderedDict
-                                self.unique_file_names[fnameModified] = [fname, [int(year), int(date_month), int(date_day), int(time_hour), int(time_min), int(time_sec), int(time_msec)]]
-
-                                # copy file with unique name
-                                if (progress == None):
-                                    shutil.copyfile(os.path.join(source_path, fname), os.path.join(dest_path, fnameModified))
-
-                                numFilesParsed += 1
-
-                                break
-                    else:
-                        print('{0} has no exif data'.format(fname))
+                    print('{0} has no exif data'.format(fname))
 
                 img.close()
 
-                print(fnameModified)
+            print(fname_modified)
 
-        if numFilesParsed == numFilesFound:
-            print('parsed all {0} files'.format(numFilesFound))
+        if num_files_parsed == num_files_found:
+            print('parsed all {0} files'.format(num_files_found))
         else:
-            print("PARSING FILE ERROR: missed {0} files".format(numFilesFound-numFilesParsed))
-
-    # TODO handle command line usage
-    # else:
-    #     print('{0} already exists'.format(dest_path))
-
-        # for filename in self.unique_file_names:
-        #     self.unique_file_names[filename].close()
+            print("PARSING FILE ERROR: missed {0} files".format(num_files_found - num_files_parsed))
 
         print('done')
 
@@ -197,7 +293,7 @@ class NamedMedia():
 
 if __name__ == "__main__":
     if len(sys.argv) == 2:
-        print("Remaining media located in %s", sys.argv[1])
+        print("Renamed media located in %s", sys.argv[1])
         # path = os.path.join(sys.argv[1])
         namedMedia = NamedMedia(sys.argv[1])
     else:

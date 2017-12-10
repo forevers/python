@@ -28,6 +28,8 @@ from mediahomewindow import *
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtWidgets import QMainWindow, QGraphicsScene, QGraphicsPixmapItem, QProgressBar
 from named_media import NamedMedia
+import shutil, os
+import pickle
 
 
 class TimeOffset(QtWidgets.QWidget):
@@ -319,6 +321,9 @@ class MyForm(QMainWindow):
         # add media button
         self.ui.addMediaButton.clicked.connect(self.add_directory)
 
+        # select destination directory button
+        self.ui.setDesinationButton.clicked.connect(self.set_destination_directory)
+
         # Pixmap object for image load
         self.pixmap = QtGui.QPixmap()
 
@@ -570,6 +575,34 @@ class MyForm(QMainWindow):
         self.progress.hide()
         self.graphicsview.setGeometry(QtCore.QRect(self.graphicsview_pos_x, self.graphicsview_pos_y, self.graphicsview_width, self.graphicsview_height))
 
+    def set_destination_directory(self):
+        """Save image set to selected directory.
+
+        Save sorted fileset to a selected set of directory.
+
+        Args:
+            none
+
+        Returns:
+            none
+
+        Raises:
+            none
+        """
+
+        # select media directory
+        dest_path = QtWidgets.QFileDialog.getExistingDirectory(self,
+                                                               "Select Destination Directory",
+                                                               "",
+                                                               QtWidgets.QFileDialog.ShowDirsOnly)
+
+        for key, list in self.media_dictionary.items():
+            for file in list[2]:
+                print("save {0}".format(file[0]))
+                # { [offset year, month, day, h, m, s, msec], color,  [ Y_M_D_H_M_S_MSEC, [fname, [year, date, time_hour, time_min, time_sec, time_msec]] ] }
+                shutil.copyfile(os.path.join(key, file[1][0]), os.path.join(dest_path, file[0]))
+
+
 
     def add_directory(self):
         """Render Image.
@@ -592,11 +625,20 @@ class MyForm(QMainWindow):
         self.scene_runtime.addText("dynamic scene!")
         self.graphicsview.setScene(self.scene_runtime)
 
+        try:
+            last_media_dir_dict = pickle.load(open("save.p", "rb"))
+            last_media_dir = last_media_dir_dict['media_dir']
+        except:
+            last_media_dir = ""
+
         # select media directory
         media_dir = QtWidgets.QFileDialog.getExistingDirectory(self,
                                                                "Select Media Directory",
-                                                               "",
+                                                               last_media_dir,
                                                                QtWidgets.QFileDialog.ShowDirsOnly)
+
+        last_media_dir_dict = {"media_dir": media_dir}
+        pickle.dump(last_media_dir_dict, open("save.p", "wb"))
 
         # default destination path
         # dest_path = path.join(media_dir, 'renamed')
